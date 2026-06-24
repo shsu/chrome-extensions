@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  # Discover extensions: any top-level directory with a src/manifest.json. CI then
+  # covers each one automatically — no workflow edits when you add an extension.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      extensions: ${{ steps.find.outputs.extensions }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        run: |
+          echo "extensions=$(for d in */; do [ -f "${d}src/manifest.json" ] && basename "$d"; done | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        extension: ${{ fromJson(needs.discover.outputs.extensions) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.extension }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate ${{ matrix.extension }}
+        run: npm test
+
+  # Repo-level checks: lint the shared tooling and git hooks (not tied to one extension).
+  repo-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Lint shared tooling & hooks
+        run: |
+          node --check tools/make-icons.mjs
+          node --check tools/test.mjs
+          bash -n tools/pack.sh
+          bash -n .githooks/pre-push

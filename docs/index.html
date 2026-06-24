@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- MANDATORY for theming: tells the browser we support both schemes before first paint (no flash). -->
+  <meta name="color-scheme" content="light dark">
+
+  <title>Minimal Chrome add-ons — least-privilege Manifest V3</title>
+  <meta name="description" content="A small family of Manifest V3 Chrome extensions built least-privilege: no host access, no page reading, no tracking — just the permissions each job truly needs.">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Minimal Chrome add-ons">
+  <meta property="og:description" content="Least-privilege Manifest V3 Chrome extensions. No host access, no tracking — just what each job needs.">
+  <meta property="og:image" content="assets/tab-refresher/icon-128.png">
+
+  <link rel="icon" href="assets/tab-refresher/icon-128.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="hero__copy">
+      <p class="eyebrow"><span class="dot dot--live"></span>chrome-extensions · Manifest V3</p>
+      <h1 class="hero__title">Add-ons that ask for&nbsp;almost&nbsp;nothing.</h1>
+      <p class="hero__sub">
+        A small family of Chrome extensions built least-privilege: no host access, no page
+        reading, no tracking — just the one or two permissions each job truly needs.
+      </p>
+      <p class="hero__actions">
+        <a class="btn btn--primary" href="#catalog">See what's published</a>
+        <a class="btn btn--ghost" href="https://github.com/shsu/chrome-extensions">Source on GitHub</a>
+      </p>
+    </div>
+
+    <div class="hero__art">
+      <div class="loop" aria-hidden="true">
+        <svg class="loop__ring" viewBox="0 0 120 120">
+          <circle class="loop__track" cx="60" cy="60" r="52"></circle>
+          <circle class="loop__sweep" cx="60" cy="60" r="52"></circle>
+        </svg>
+        <img class="loop__glyph" src="assets/tab-refresher/icon-128.png" alt="">
+      </div>
+      <p class="loop__caption">refreshes every <strong>60s</strong></p>
+    </div>
+  </header>
+
+  <main>
+    <section class="catalog" id="catalog">
+      <div class="catalog__head">
+        <h2 class="catalog__title">
+          <span class="dot dot--live"></span>Published
+          <span class="catalog__count" id="addon-count" aria-hidden="true"></span>
+        </h2>
+        <p class="catalog__note">Only add-ons marked published appear here. Each links to its source.</p>
+      </div>
+
+      <!-- Cards render here from addons.json; this fallback shows if scripting is off. -->
+      <div class="grid" id="addon-grid">
+        <noscript>
+          <div class="empty">
+            <p>This page lists the add-ons from <code>addons.json</code>, rendered with JavaScript.</p>
+            <a href="https://github.com/shsu/chrome-extensions">Browse the repo →</a>
+          </div>
+        </noscript>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p><a href="https://github.com/shsu/chrome-extensions">github.com/shsu/chrome-extensions</a></p>
+    <p class="site-footer__meta">MIT · built by Steven Hsu</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-push secret scan with gitleaks. Blocks the push if a secret is detected.
+# Enable once per clone:  npm run hooks   (sets core.hooksPath to .githooks)
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks not installed — skipping pre-push secret scan."
+  echo "  install it to enable protection, e.g.:  brew install gitleaks"
+  exit 0
+fi
+
+echo "gitleaks: scanning for secrets before push…"
+# Prefer the modern 'git' subcommand; fall back to the classic 'detect'.
+if gitleaks git --help >/dev/null 2>&1; then
+  gitleaks git --no-banner --redact
+else
+  gitleaks detect --no-banner --redact --source .
+fi
+
+echo "✓ gitleaks: no secrets found."

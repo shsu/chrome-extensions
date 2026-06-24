@@ -1,0 +1,11 @@
+# Build artifacts (regenerate with: bash tools/pack.sh)
+dist/
+*.zip
+*.crx
+
+# Signing keys — never commit
+*.pem
+
+# OS / editor cruft
+.DS_Store
+node_modules/
