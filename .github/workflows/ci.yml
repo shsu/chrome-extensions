@@ -1,8 +1,9 @@
 name: CI
 
+# push is limited to main so a branch with an open PR runs once, not twice.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 jobs:

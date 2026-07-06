@@ -18,8 +18,10 @@ chrome-extensions/
 ├── tools/                     # shared, generic: make-icons.mjs, pack.sh, test.mjs
 ├── tab-refresher/             # a self-contained MV3 extension
 │   ├── src/                   #   what Chrome loads: manifest.json, service-worker.js, icons/
+│   ├── test/                  #   behavior test (mocked chrome + fake clock)
 │   ├── package.json  README.md  CHANGELOG.md
 │   └── dist/                  #   built zip/crx (gitignored)
+├── docs/                      # GitHub Pages catalog site (index.html, app.js, addons.json)
 ├── .github/workflows/ci.yml   # matrix: runs each extension's `npm test` on push / PR
 ├── .githooks/pre-push         # gitleaks secret scan
 ├── .editorconfig  .gitignore  LICENSE

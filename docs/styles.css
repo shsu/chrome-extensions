@@ -21,14 +21,15 @@
   --line-l:  #e6e8e2;
   --line-d:  #28322c;
 
-  /* Resolved tokens. */
-  --green:   light-dark(var(--green-on), var(--green-bright));
-  --bg:      light-dark(var(--paper), var(--deep));
-  --surface: light-dark(var(--card-l), var(--card-d));
-  --ink:     light-dark(var(--ink-l), var(--ink-d));
-  --muted:   light-dark(var(--muted-l), var(--muted-d));
-  --line:    light-dark(var(--line-l), var(--line-d));
-  --green-soft: light-dark(#eaf3eb, #16291a);  /* green tint for chips/fills */
+  /* Resolved tokens — light values; the dark set is swapped in by the
+     prefers-color-scheme block below (works in every browser, unlike light-dark()). */
+  --green:   var(--green-on);
+  --bg:      var(--paper);
+  --surface: var(--card-l);
+  --ink:     var(--ink-l);
+  --muted:   var(--muted-l);
+  --line:    var(--line-l);
+  --green-soft: #eaf3eb;    /* green tint for chips/fills */
 
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -37,6 +38,18 @@
   --radius: 14px;
 
   accent-color: var(--green);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --green:   var(--green-bright);
+    --bg:      var(--deep);
+    --surface: var(--card-d);
+    --ink:     var(--ink-d);
+    --muted:   var(--muted-d);
+    --line:    var(--line-d);
+    --green-soft: #16291a;
+  }
 }
 
 * { box-sizing: border-box; }

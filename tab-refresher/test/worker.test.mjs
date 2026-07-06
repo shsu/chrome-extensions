@@ -21,21 +21,22 @@ const check = (name, cond, detail = '') => {
   else { fail++; console.log(`FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 };
 
-// Build a fresh mocked environment + load the worker into it.
-function load() {
+// Build a fresh mocked environment + load the worker into it. seedStore pre-populates
+// chrome.storage.local, simulating a worker woken after a kill with state already persisted.
+function load(seedStore) {
   const clock = { now: 1_000_000 };
   const L = {};                       // captured listeners by event name
-  const store = {};                   // chrome.storage.local backing
+  const store = { ...seedStore };     // chrome.storage.local backing
   const alarms = new Map();           // name -> { name, periodInMinutes, scheduledTime }
   const restricted = new Set();       // tabIds whose reload() should throw
   let activeTab = null;
-  const calls = { reload: [], setIcon: [], setBadgeText: [], setBadgeBg: [], setTitle: [], noTabId: [] };
+  const calls = { reload: [], setIcon: [], setBadgeText: [], setBadgeBg: [], setBadgeTextColor: [], setTitle: [], noTabId: [] };
 
   const reg = (key) => ({ addListener: (fn) => { L[key] = fn; } });
   const guardTabId = (kind, o) => { if (!o || o.tabId == null) calls.noTabId.push({ kind, o }); };
 
   const chrome = {
-    storage: { local: {
+    storage: { session: {
       async get(keys) {
         const ks = Array.isArray(keys) ? keys : typeof keys === 'string' ? [keys] : Object.keys(keys || {});
         const out = {};
@@ -54,22 +55,35 @@ function load() {
       onAlarm: reg('onAlarm'),
     },
     tabs: {
-      async reload(tabId) { if (restricted.has(tabId)) throw new Error('not reloadable'); calls.reload.push({ t: clock.now, tabId }); },
+      async reload(tabId, opts) { if (restricted.has(tabId)) throw new Error('not reloadable'); calls.reload.push({ t: clock.now, tabId, opts }); },
       async query() { return activeTab == null ? [] : [{ id: activeTab, active: true }]; },
       onRemoved: reg('onRemoved'),
       onActivated: reg('onActivated'),
+      onReplaced: reg('onReplaced'),
+    },
+    windows: {
+      WINDOW_ID_NONE: -1,
+      onFocusChanged: reg('onFocusChanged'),
     },
     action: {
       async setIcon(o) { guardTabId('setIcon', o); calls.setIcon.push({ ...o }); },
       async setTitle(o) { guardTabId('setTitle', o); calls.setTitle.push({ ...o }); },
       async setBadgeText(o) { guardTabId('setBadgeText', o); calls.setBadgeText.push({ ...o }); },
       async setBadgeBackgroundColor(o) { guardTabId('setBadgeBg', o); calls.setBadgeBg.push({ ...o }); },
+      async setBadgeTextColor(o) { guardTabId('setBadgeTextColor', o); calls.setBadgeTextColor.push({ ...o }); },
       onClicked: reg('onClicked'),
     },
     runtime: { onStartup: reg('onStartup'), onInstalled: reg('onInstalled') },
   };
 
-  const ctx = { chrome, console, Date: { now: () => clock.now }, setInterval: () => 0, clearInterval: () => {} };
+  // Capturing interval fake: lets tests fire the keep-alive tick by hand via tick().
+  const intervals = new Map();
+  let nextIntervalId = 0;
+  const ctx = {
+    chrome, browser: chrome, console, Date: { now: () => clock.now },
+    setInterval: (fn) => { intervals.set(++nextIntervalId, fn); return nextIntervalId; },
+    clearInterval: (id) => { intervals.delete(id); },
+  };
   vm.createContext(ctx);
   vm.runInContext(CODE, ctx);
 
@@ -92,14 +106,18 @@ function load() {
   const lastBadge = (tabId) => [...calls.setBadgeText].reverse().find((c) => c.tabId === tabId)?.text ?? '';
 
   return {
-    L, store, alarms, calls, clock, advance, isGreen, lastIcon, lastBadge,
+    L, store, alarms, calls, clock, advance, isGreen, lastIcon, lastBadge, intervals,
+    tick: async () => { for (const fn of [...intervals.values()]) await fn(); },
     setActive: (id) => { activeTab = id; },
     restrict: (id) => restricted.add(id),
     click: (id) => L.onClicked({ id }),
     activate: (id) => L.onActivated({ tabId: id }),
     closeTab: (id) => L.onRemoved(id),
+    replaceTab: (addedId, removedId) => L.onReplaced(addedId, removedId),
+    focusWindow: (windowId) => L.onFocusChanged(windowId),
     install: () => L.onInstalled(),
-    startup: () => L.onStartup(),
+    // Chrome clears storage.session at browser restart — the mock does the same before onStartup.
+    startup: () => { for (const k of Object.keys(store)) delete store[k]; return L.onStartup(); },
   };
 }
 
@@ -108,6 +126,7 @@ async function run() {
   {
     const w = load();
     check('registers onClicked / onAlarm / onRemoved / onActivated', !!(w.L.onClicked && w.L.onAlarm && w.L.onRemoved && w.L.onActivated));
+    check('registers onReplaced / windows.onFocusChanged', !!(w.L.onReplaced && w.L.onFocusChanged));
     check('registers onStartup / onInstalled', !!(w.L.onStartup && w.L.onInstalled));
   }
 
@@ -123,6 +142,7 @@ async function run() {
     check('B never got a green icon (shows OFF)', !w.calls.setIcon.some((c) => c.tabId === 2 && w.isGreen(c)));
     check('B has no countdown badge', (w.lastBadge(2) || '') === '');
     check('one shared alarm exists', w.alarms.size === 1 && w.alarms.has('tab-refresh'));
+    check('A badge digits pinned white', w.calls.setBadgeTextColor.some((c) => c.tabId === 1 && /^#fff/i.test(c.color)));
   }
 
   // --- shared timer: B armed at +15s shows ~45 and joins the SAME alarm ------------
@@ -142,6 +162,7 @@ async function run() {
     const reloaded = new Set(w.calls.reload.map((r) => r.tabId));
     check('shared fire reloaded A and B', reloaded.has(1) && reloaded.has(2));
     check('OFF tab C was never reloaded', !reloaded.has(3));
+    check('reloads carry the BYPASS_CACHE option (off)', w.calls.reload.every((r) => r.opts?.bypassCache === false));
     check('after fire, badges reset toward 60', w.lastBadge(1) === '60' && w.lastBadge(2) === '60', `A=${w.lastBadge(1)} B=${w.lastBadge(2)}`);
   }
 
@@ -177,13 +198,60 @@ async function run() {
     check('B still the only ON tab', w.alarms.has('tab-refresh'));
   }
 
+  // --- tab replaced by Chrome (prerender swap): refresh follows the new id ---------
+  {
+    const w = load();
+    await w.install();
+    w.setActive(1); await w.click(1);
+    await w.replaceTab(9, 1);                         // Chrome swaps tab 1 -> tab 9
+    await w.advance(60_000);
+    const reloaded = w.calls.reload.map((r) => r.tabId);
+    check('replaced tab keeps refreshing under its new id', reloaded.includes(9), `got ${reloaded}`);
+    check('old id is never reloaded after the swap', !reloaded.includes(1));
+    check('new id shows green', w.isGreen(w.lastIcon(9) ?? {}));
+    check('replacing an OFF tab changes nothing', (await (async () => { await w.replaceTab(7, 5); return w.store.tabIds.length; })()) === 1);
+  }
+
+  // --- window focus change resyncs the visible tab's badge to the shared clock -----
+  {
+    const w = load();
+    await w.install();
+    w.setActive(1); await w.click(1);                 // t=0, badge 60
+    await w.advance(20_000);                          // t=20, worker slept: badge still says 60
+    await w.focusWindow(5);                           // focus returns to this tab's window
+    check('focus change resyncs badge to time left (40)', w.lastBadge(1) === '40', `got ${w.lastBadge(1)}`);
+    await w.focusWindow(-1);                          // WINDOW_ID_NONE: focus left Chrome
+    check('losing focus does not touch the badge', w.lastBadge(1) === '40');
+  }
+
+  // --- keep-alive ticker: armed on ON, follows the clock, self-clears when empty ---
+  {
+    const w = load();
+    await w.install();
+    w.setActive(1); await w.click(1);
+    check('keep-alive ticker armed on first ON', w.intervals.size === 1);
+    await w.advance(5_000);
+    await w.tick();
+    check('each tick redraws the visible badge (55)', w.lastBadge(1) === '55', `got ${w.lastBadge(1)}`);
+    await w.click(1);                                 // last tab off
+    await w.tick();                                   // next tick notices the empty set
+    check('ticker self-clears when the set empties', w.intervals.size === 0);
+  }
+
+  // --- worker restart with tabs still ON: keep-alive re-arms without a click -------
+  {
+    const w = load({ tabIds: [1] });                  // storage as left behind by a killed worker
+    await new Promise((r) => setImmediate(r));        // let the load-time re-arm settle
+    check('keep-alive re-arms on worker start', w.intervals.size === 1);
+  }
+
   // --- restart/install resets to empty --------------------------------------------
   {
     const w = load();
     w.setActive(1); await w.click(1);
     await w.startup();
     check('startup cleared the alarm', w.alarms.size === 0);
-    check('startup reset tabIds to empty', Array.isArray(w.store.tabIds) && w.store.tabIds.length === 0, `tabIds=${JSON.stringify(w.store.tabIds)}`);
+    check('session store empty after restart (cleared by the platform)', (w.store.tabIds ?? []).length === 0, `tabIds=${JSON.stringify(w.store.tabIds)}`);
   }
 
   // --- global invariant across everything above: no action call without a tabId ----

@@ -5,10 +5,10 @@
     "tagline": "Toggle any tab to auto-refresh it every 60 seconds — per-tab on/off with a live countdown. Run several at once.",
     "icon": "assets/tab-refresher/icon-128.png",
     "published": true,
-    "version": "1.0.0",
+    "version": "1.2.0",
     "permissions": ["alarms", "storage"],
     "webStoreUrl": null,
     "githubUrl": "https://github.com/shsu/chrome-extensions/tree/main/tab-refresher",
-    "installUrl": "https://github.com/shsu/chrome-extensions/releases"
+    "installUrl": "https://github.com/shsu/chrome-extensions/tree/main/tab-refresher#install-load-unpacked"
   }
 ]

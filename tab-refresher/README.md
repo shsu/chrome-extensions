@@ -1,8 +1,8 @@
 # Tab Refresher
 
-[![CI](https://github.com/shsu/chrome-extensions/actions/workflows/ci.yml/badge.svg)](https://github.com/shsu/chrome-extensions/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
+[![CI](https://github.com/shsu/chrome-extensions/actions/workflows/ci.yml/badge.svg)](https://github.com/shsu/chrome-extensions/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../LICENSE)
 
-> Part of the [**chrome-extensions**](../../README.md) monorepo. This directory is a self-contained extension.
+> Part of the [**chrome-extensions**](../README.md) monorepo. This directory is a self-contained extension.
 
 A minimal Google Chrome extension (Manifest V3) that auto-refreshes tabs on a timer. Refresh is
 **toggled per tab and off by default**; the **entire UI is the toolbar icon**: click it to turn the
@@ -24,7 +24,7 @@ the same green as the icon.
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top-right).
-3. Click **Load unpacked** and select the `plugins/tab-refresher` folder.
+3. Click **Load unpacked** and select the `tab-refresher/src` folder.
 4. The grey recycling icon appears in the toolbar. Pin it if you don't see it.
 
 ## Usage
@@ -51,7 +51,7 @@ reads page content, URLs, titles, or your browsing history.
 | Permission | Why it's needed |
 |------------|-----------------|
 | `alarms`   | A Manifest V3 service worker is terminated after ~30s idle, so `setInterval` can't drive a reliable periodic timer. `chrome.alarms` is the supported way to fire on a schedule — here, **one shared alarm** (`tab-refresh`) that runs while any tab is ON. |
-| `storage`  | Persists the **set of refreshing tab ids** so the ephemeral service worker can survive being shut down and restarted between alarm firings. |
+| `storage`  | Persists the **set of refreshing tab ids** so the ephemeral service worker can survive being shut down and restarted between alarm firings — in `storage.session`, whose lifetime matches exactly: survives worker kills, cleared by Chrome with the browser session. |
 
 ### Permissions we deliberately do **not** request
 
@@ -75,11 +75,13 @@ Every choice and its rationale (per the project requirement to document all deci
 
 - **Manifest V3.** Manifest V2 is fully deprecated; MV3 is the only target Chrome supports in 2026.
 
-- **`minimum_chrome_version: "88"`.** Chrome 88 is where MV3, the `chrome.action` API, and
-  `chrome.action.setIcon({ path })` from a service worker all became available — the genuine floor for
-  this extension. Nothing here needs a newer release (the 60s interval sits above the 30s alarm floor
-  that arrived in Chrome 120), so 88 is declared rather than an inflated version that would block
-  browsers where it would actually run.
+- **`minimum_chrome_version: "148"`.** The code's hard floor is Chrome 111: the worker is written
+  promise-first (`await chrome.storage…`, `await chrome.alarms…`), and promise support landed
+  per-API — `chrome.storage` in 95, most of `chrome.alarms` in 91, `chrome.alarms.create` in 111.
+  (An 88 floor would be flattering but broken: on 88–94, callback-less `storage.get` throws and every
+  listener dies.) On top of that floor we declare current stable: Chrome auto-updates, so this only
+  excludes long-unpatched browsers, and it keeps the declared surface to the Chrome the extension is
+  actually tested against.
 
 - **No popup — the toolbar icon *is* the control.** Because no `default_popup` is declared,
   `chrome.action.onClicked` fires on click, letting us toggle directly. This removes all popup
@@ -107,24 +109,28 @@ Every choice and its rationale (per the project requirement to document all deci
   in the set. The service worker is killed when idle; the alarm is what wakes it back up.
 
 - **A live countdown badge, same green as the icon.** Each ON tab shows a badge counting the seconds to
-  the next shared refresh (`chrome.action.setBadgeText`, per tab) on a `#43A047` background that matches
-  the recycle glyph (Chrome auto-picks contrasting text). Because the timer is shared, it's **one value
-  shown identically on every ON tab**, computed from the single alarm's `scheduledTime`. It clears when
-  the tab turns off.
-  - *The cost:* a smooth per-second countdown needs the worker awake. **By default the keep-alive is
-    off** — the badge is set on toggle, on tab-focus, and on each fire (cheap; the worker sleeps
-    between, so the number may sit and then jump). Flipping the keep-alive constant keeps the worker
-    resident and ticks the visible tab's badge every second.
+  the next shared refresh (`action.setBadgeText`, per tab) on a `#43A047` background that matches the
+  recycle glyph, with the digits pinned white (`action.setBadgeTextColor`) rather than trusting
+  auto-contrast. Because the timer is shared, it's **one value shown identically on every ON tab**,
+  computed from the single alarm's `scheduledTime`. It clears when the tab turns off.
+  - *The cost:* a smooth per-second countdown needs the worker awake. **The keep-alive is on by
+    default** — while any tab is refreshing, the worker stays resident and ticks the visible tab's
+    badge every second, re-arming itself whenever the worker restarts with tabs still ON. Set
+    `KEEP_ALIVE = false` to let the worker sleep between events (the badge then updates on toggle,
+    tab- or window-focus, and each fire, so it may sit and then jump).
 
-- **State in `chrome.storage.local`.** Key: `tabIds` (`number[]` — the set of ON tabs; empty is the
-  default, all off). Local, not `sync`, because tab ids are specific to this machine/session. Clicks,
-  the alarm fire, and tab closes all mutate this one set, so every read-modify-write is serialized to
-  keep a concurrent change from dropping a tab.
+- **State in `browser.storage.session`.** Key: `tabIds` (`number[]` — the set of ON tabs; empty is
+  the default, all off). Session — not `local` or `sync` — because the state's lifetime *is* the
+  browser session: it survives service-worker kills (its purpose in MV3), and Chrome itself clears it
+  when the browser restarts or the extension is disabled/reloaded/updated, so stale tab ids are
+  impossible by construction rather than by cleanup code. Clicks, the alarm fire, and tab closes all
+  mutate this one set, so every read-modify-write is serialized to keep a concurrent change from
+  dropping a tab.
 
-- **ON does not survive a browser restart — by design.** Tab ids are not stable across a restart, and
-  the alarm is not persisted across sessions, so remembered state would point at tabs that no longer
-  exist. On `onStartup`/`onInstalled` the extension clears the `tab-refresh` alarm and resets to an
-  empty set. Re-arm with one click per tab after a restart.
+- **ON does not survive a browser restart — by design.** Tab ids are not stable across a restart, so
+  remembered state would point at tabs that no longer exist. The set lives in `storage.session`,
+  which Chrome clears at browser restart and on extension reload/update; `onStartup`/`onInstalled`
+  only clear the `tab-refresh` alarm defensively. Re-arm with one click per tab after a restart.
 
 - **Icons: a circular two-arrow recycle/refresh loop**, green for ON and grey for OFF, swapped per tab
   at runtime via `chrome.action.setIcon` — tabs with no override fall back to the grey `default_icon`,
@@ -139,23 +145,25 @@ joins the next shared tick (so its first reload is whatever time is left on the 
 shows the seconds to that tick and reads the same on every ON tab.
 
 **Architecture.** One shared alarm `tab-refresh` drives the cycle; the only state is the set of ON tab
-ids in `chrome.storage.local` (`tabIds`, default empty).
+ids in `browser.storage.session` (`tabIds`, default empty).
 
 ```
 toolbar click ─ onClicked(tab) ─▶ tab ON? ─ no ─▶ add id; if set was empty, create the 60s alarm; green icon + badge
                                      └─ yes ─▶ remove id; grey icon, clear badge; if set now empty, clear the alarm
 
-alarm tab-refresh fires (every 60s) ─▶ reload EVERY tab in the set ─▶ drop any that fail (closed/restricted)
+alarm tab-refresh fires (every 60s) ─▶ reload EVERY tab in the set, in parallel ─▶ drop any that fail (closed/restricted)
 tab closed ───────────────▶ remove id from set (clear the alarm if it empties)
-browser startup / install ─▶ clear the alarm, reset the set to empty
+tab id replaced by Chrome ─▶ swap the old id for the new one (refresh follows the tab)
+browser startup / install ─▶ clear the alarm (Chrome empties storage.session itself)
 ```
 
 - **One shared alarm, not one-per-tab** — the worker wakes once per cycle regardless of tab count
   (O(1) alarms; the O(n) cost is the reloads themselves, which is inherent).
 - **Per-tab icon/badge** via `chrome.action.set*({ tabId })`; every call carries a `tabId`, so green
   and the badge never leak onto tabs you didn't turn on (those fall back to the grey default).
-- **Countdown** from the single alarm's `scheduledTime` — one value for all ON tabs; refreshed on
-  toggle / tab-focus / fire by default, or ticked every second behind the opt-in keep-alive.
+- **Countdown** from the single alarm's `scheduledTime` — one value for all ON tabs; ticked every
+  second by the default keep-alive (which re-arms on worker start), or refreshed only on toggle /
+  tab-focus / window-focus / fire when that's disabled.
 - **Serialized state** — clicks, the fire, and tab-closes all mutate the one set, so every
   read-modify-write is chained to stop a concurrent change from dropping a tab.
 
@@ -163,81 +171,68 @@ All logic lives in `service-worker.js` (no DOM, no dependencies).
 
 ## Limitations
 
+- The first *arming* click after ~30s with no tab refreshing can lag a beat (~100–300 ms): MV3
+  terminates the idle service worker, and Chrome must cold-start it before the click handler runs.
+  While any tab is ON, the keep-alive holds the worker resident, so every further click is instant.
 - Cannot refresh restricted pages (`chrome://*`, the Chrome Web Store, etc.). On those, the reload
   call fails and that tab safely turns itself OFF — other tabs are unaffected.
 - Fastest possible interval is 30 seconds (Chrome's alarm floor).
-- The per-second countdown is smooth only while the worker is kept awake (any tab refreshing). With
-  keep-alive off it still refreshes on time, but the badge ticks coarsely between minutes.
+- The per-second countdown is smooth only while the worker is kept awake (the default while any tab
+  is refreshing). With `KEEP_ALIVE = false` it still refreshes on time, but the badge ticks coarsely
+  between minutes.
 - ON state resets when Chrome restarts (see decisions above) — re-arm each tab with one click.
 
 ## Customize
 
 - **Change the interval:** edit `PERIOD_MINUTES` in `service-worker.js` (`1` = 60s; minimum `0.5` = 30s),
   then reload the extension at `chrome://extensions`.
+- **Hard refresh:** set `BYPASS_CACHE = true` in `service-worker.js` to make every tick skip the HTTP
+  cache (like Shift+Reload) — useful when the page itself caches too aggressively. Off by default.
 - **Change the icon / badge color:** edit `COLORS` in `tools/make-icons.mjs` (re-run it, below) — the
   countdown badge reads the same green, so both stay in sync.
-- **Smooth the countdown:** the worker-keep-alive that ticks the badge every second is **off by
-  default** (the badge updates on toggle, tab-focus, and each refresh); flip the keep-alive constant in
-  `service-worker.js` (documented inline) to make it count down live, at the cost of a resident worker.
+- **Lighten the worker:** the keep-alive that ticks the badge every second is **on by default** (a
+  resident worker while any tab refreshes); set `KEEP_ALIVE = false` in `service-worker.js`
+  (documented inline) to let the worker sleep between events at the cost of a coarser countdown.
 
 ## Developer scripts (npm)
 
-No runtime dependencies — the scripts use Node built-ins, `zip`, and the `gh` CLI.
+No runtime dependencies — the scripts use Node built-ins and `zip`. They call the shared tooling in
+`../tools/`, which acts on this extension directory.
 
 | Command | What it does |
 |---------|--------------|
-| `npm test` | Validates the extension without a browser: MV3 shape, version sync, minimal permissions, no `default_popup`, every referenced icon present and correctly sized, and that all JS/shell sources parse. |
-| `npm run build` | Packages `dist/tab-refresher-<version>.zip` (the Web Store / Release artifact). `dist/` is gitignored. |
-| `npm run release` | Runs the tests, builds the zip, then creates or updates the GitHub Release for the current version tag (idempotent). Requires `gh` authenticated. |
+| `npm test` | Validates the extension without a browser: MV3 shape, version sync, minimal permissions, no `default_popup`, every referenced icon present and correctly sized, the service worker parses — then runs the mocked-`chrome` behavior test (`test/worker.test.mjs`). |
+| `npm run pack` | Builds `dist/tab-refresher-<git-hash>.zip` (and a `.crx` if a local Chrome is found). `dist/` is gitignored. |
 | `npm run icons` | Regenerates the committed green/grey recycle PNGs (e.g. after changing colors). |
+| `npm run hooks` | Points `core.hooksPath` at `.githooks` (gitleaks pre-push scan). |
 
 > **Version is sourced from `manifest.json`.** `package.json`'s `version` must match it — `npm test`
 > fails if they drift, so bump both when cutting a new release.
 
-## Releasing (GitHub + Chrome Web Store)
+## Packaging (no automated publishing)
 
-Releases are cut by pushing a version tag. `.github/workflows/release.yml` then runs `npm test`,
-builds the zip, publishes a **GitHub Release**, and (optionally) uploads to the **Chrome Web Store**:
-
-```bash
-# bump version in BOTH manifest.json and package.json, commit, then:
-git tag v1.1.0 && git push origin v1.1.0
-```
-
-GitHub publishing is immediate. Chrome Web Store publishing is **opt-in and asynchronous** (Google
-reviews every update before it goes live):
-
-1. One-time: register on the [Web Store dashboard](https://chrome.google.com/webstore/devconsole)
-   ($5), upload the first build and complete the listing manually, then create a Google Cloud OAuth
-   client + refresh token for the Chrome Web Store API.
-2. Add repo **secrets** `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`.
-3. Add repo **variable** `PUBLISH_WEBSTORE=true` to enable the Web Store step.
-
-Until step 3 the workflow publishes to GitHub only. Locally, `npm run release` publishes to GitHub only.
+There is no release workflow — `npm run pack` builds the artifacts locally (see the
+[monorepo README](../README.md#packaging-no-publishing) for details). Publishing to the
+[Chrome Web Store](https://chrome.google.com/webstore/devconsole) is a manual step: the store wants a
+root-level zip of `src/`, uploaded through the dashboard.
 
 ## File layout
 
 ```
-chrome-tab-refresher/
-├── .github/workflows/
-│   ├── ci.yml           # run npm test on every push / PR
-│   └── release.yml      # tag push -> GitHub Release + (opt-in) Web Store upload
-├── .githooks/pre-push   # gitleaks secret scan (enable: npm run hooks)
-├── manifest.json        # MV3 manifest: permissions, no-popup action, service worker
-├── service-worker.js    # all runtime logic (toggle, alarm, reload, icon/state)
-├── icons/               # green-* (ON) and grey-* (OFF) recycle icons, 16/32/48/128 px
-├── package.json         # npm scripts (build / test / release / icons / hooks)
-├── tools/               # dev-only, not loaded by Chrome
-│   ├── make-icons.mjs   #   regenerate the icons
-│   ├── pack.sh          #   build dist/<...>.zip
-│   ├── test.mjs         #   validate the extension
-│   └── release.sh       #   build + publish a GitHub Release
-├── dist/                # build output (gitignored)
+tab-refresher/               # self-contained extension inside the monorepo
+├── src/                     # what Chrome loads
+│   ├── manifest.json        #   MV3 manifest: permissions, no-popup action, service worker
+│   ├── service-worker.js    #   all runtime logic (toggle, alarm, reload, icon/state)
+│   └── icons/               #   green-* (ON) and grey-* (OFF) recycle icons, 16/32/48/128 px
+├── test/worker.test.mjs     # behavior test: real worker + mocked chrome + fake clock
+├── package.json             # npm scripts (test / pack / icons / hooks) -> ../tools/
+├── dist/                    # build output (gitignored)
 ├── CHANGELOG.md
-├── LICENSE
-├── .editorconfig
 └── README.md
 ```
+
+Shared, repo-level pieces live one directory up: `tools/` (validator, packager, icon generator),
+`.github/workflows/ci.yml`, `.githooks/pre-push`, `LICENSE`, `.editorconfig`.
 
 ---
 
@@ -250,12 +245,21 @@ Confirmed against the official Chrome for Developers docs (2026):
 - `chrome.alarms` minimum period is 30 seconds; default alarms are not persisted across restarts.
 - `chrome.action.onClicked` fires only when no `default_popup` is set.
 - `chrome.action.setIcon({ path })` swaps the toolbar icon at runtime (unpacked extensions must use PNG).
-- `chrome.action.setIcon` / `setBadgeText` / `setBadgeBackgroundColor` all accept a `tabId` to scope the
-  icon and countdown badge to a single tab; none require a permission, and badge text-contrast is chosen
-  by Chrome automatically (no `setBadgeTextColor`, so `minimum_chrome_version` stays 88).
+- `action.setIcon` / `setBadgeText` / `setBadgeBackgroundColor` / `setBadgeTextColor` (Chrome 110+) all
+  accept a `tabId` to scope the icon and countdown badge to a single tab; none require a permission.
+- Since Chrome 148, every extension API is also exposed under the cross-browser `browser` namespace —
+  identical objects to `chrome.*` in Chrome. This worker uses `browser.*` throughout.
+- Promise (callback-less) support is per-API: `chrome.storage` since Chrome 95, `chrome.alarms.get`/`clear`
+  since 91, `chrome.alarms.create` since 111 — the hard floor for this promise-first worker
+  (`minimum_chrome_version` declares 148; see design decisions).
+- `chrome.tabs.onReplaced` and `chrome.windows.onFocusChanged` need no permission — used to follow a
+  prerender-swapped tab id and to resync the countdown badge when window focus changes.
 - `chrome.alarms.get(name)` returns the next `scheduledTime`; with one shared `tab-refresh` alarm,
   that single value is what every ON tab's countdown badge counts down to.
 - `chrome.storage` (`storage` permission) is non-sensitive — no extra Web Store review or user warning.
+- `storage.session` (Chrome 102+) is in-memory: it survives service-worker restarts and is cleared
+  when the browser restarts or the extension is disabled/reloaded/updated; the `storage` permission
+  covers it (10 MB quota).
 - `chrome.tabs.onRemoved` needs no permission: by the gating rule above it carries only `tabId` and
   `removeInfo` (none of `url`/`title`/`favIconUrl`/`pendingUrl`), so the auto-stop-on-close listener
   works without the `tabs` permission.
@@ -270,9 +274,9 @@ npm run hooks            # points git's core.hooksPath at .githooks
 brew install gitleaks    # the hook warns and skips if gitleaks isn't installed
 ```
 
-The extension ships no network code, no secrets, and no host access. Release credentials live only in
-GitHub repo secrets (never committed), and `*.pem` signing keys are gitignored.
+The extension ships no network code, no secrets, and no host access. `*.pem` signing keys are
+gitignored.
 
 ## License
 
-[MIT](LICENSE) © 2026 Steven Hsu
+[MIT](../LICENSE) © 2026 Steven Hsu

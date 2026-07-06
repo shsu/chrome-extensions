@@ -8,7 +8,13 @@ const grid = document.getElementById('addon-grid');
 const countEl = document.getElementById('addon-count');
 
 const el = (tag, props = {}, children = []) => {
-  const node = Object.assign(document.createElement(tag), props);
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    // Dashed keys (e.g. aria-label) are attributes; assigning them as properties
+    // creates an expando that never reaches the DOM.
+    if (key.includes('-')) node.setAttribute(key, value);
+    else node[key] = value;
+  }
   for (const child of [].concat(children)) {
     if (child != null) node.append(child);
   }
